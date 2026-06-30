@@ -102,18 +102,6 @@ export default function AboutPage() {
           detection rules for every dataset they collect.
         </p>
       </Section>
-
-      <Section title="Contact">
-        <p>
-          Questions or feedback?{' '}
-          <a
-            href="mailto:hello@dimsense.io"
-            className="text-accent hover:underline"
-          >
-            hello@dimsense.io
-          </a>
-        </p>
-      </Section>
     </div>
   )
 }
