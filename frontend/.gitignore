@@ -1,3 +1,6 @@
+# Environment — local overrides only; .env.production is committed intentionally
+.env
+
 # Logs
 logs
 *.log
