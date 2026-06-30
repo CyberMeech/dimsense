@@ -14,7 +14,10 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
-from backend.analyze import analyze_field, classify_reason, passes_filter
+try:
+    from analyze import analyze_field, classify_reason, passes_filter  # Railway: backend/ is root
+except ImportError:
+    from backend.analyze import analyze_field, classify_reason, passes_filter  # local: run from project root
 
 BASE_DIR = Path(__file__).resolve().parent
 UPLOAD_DIR = BASE_DIR / "uploads"
