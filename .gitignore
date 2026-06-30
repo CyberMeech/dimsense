@@ -1,0 +1,23 @@
+# Secrets
+backend/.env
+.env
+
+# Uploads (temporary, deleted after analysis anyway)
+backend/uploads/
+
+# Python
+**/__pycache__/
+*.pyc
+*.pyo
+
+# Test data (large CSV files)
+data/*.csv
+
+# Node
+**/node_modules/
+
+# Frontend build output
+frontend/dist/
+
+# Editor
+.vscode/
