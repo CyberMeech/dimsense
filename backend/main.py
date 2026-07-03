@@ -27,7 +27,7 @@ WINDOW_SIZE = 8192
 ROLLING_WINDOW = 20
 ROLLING_MIN_PERIODS = 5
 TOP_N_SURROGATE = 10
-ANOMALY_SCORE_THRESHOLD = 3
+ANOMALY_FLAG_THRESHOLD = 10
 
 logger = logging.getLogger("dimsense")
 
@@ -499,7 +499,7 @@ async def confirm_fields(session_id: str, body: ConfirmFieldsRequest):
                 "n_max_anomalous": m_anom,
             })
 
-        is_flagged = anomaly_score >= ANOMALY_SCORE_THRESHOLD
+        is_flagged = anomaly_score >= ANOMALY_FLAG_THRESHOLD
         window = {
             "window_index": w,
             "window_start": window_meta[w]["window_start"],

@@ -11,22 +11,22 @@ function formatTimestamp(iso) {
 }
 
 function getSeverityTier(score) {
-  if (score >= 7) {
+  if (score >= 17) {
     return {
-      label: 'High confidence',
+      label: 'Critical confidence',
       badgeClass: 'bg-danger/15 text-danger',
       bannerClass: 'border-danger/40 bg-danger/10',
     }
   }
-  if (score >= 5) {
+  if (score >= 12) {
     return {
-      label: 'Medium confidence',
+      label: 'High confidence',
       badgeClass: 'bg-orange-500/15 text-orange-400',
       bannerClass: 'border-orange-500/40 bg-orange-500/10',
     }
   }
   return {
-    label: 'Low confidence',
+    label: 'Low-Medium confidence',
     badgeClass: 'bg-warning/15 text-warning',
     bannerClass: 'border-warning/40 bg-warning/10',
   }
@@ -98,7 +98,7 @@ function FlaggedWindowCard({ window }) {
           </span>
           <span className="text-sm font-semibold text-text-primary">{tier.label}</span>
         </div>
-        {window.anomaly_score >= 5 && (
+        {window.anomaly_score >= 12 && (
           <p className="mt-3 text-sm font-bold text-text-primary leading-relaxed">
             {HIGH_CONFIDENCE_CALLOUT}
           </p>
