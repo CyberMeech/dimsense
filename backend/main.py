@@ -1,3 +1,4 @@
+import logging
 import statistics
 import time
 import uuid
@@ -5,7 +6,6 @@ from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
@@ -26,8 +26,10 @@ SESSION_TTL_SECONDS = 60 * 60
 WINDOW_SIZE = 8192
 ROLLING_WINDOW = 20
 ROLLING_MIN_PERIODS = 5
-ZSCORE_THRESHOLD = 3.0
+TOP_N_SURROGATE = 10
 ANOMALY_SCORE_THRESHOLD = 3
+
+logger = logging.getLogger("dimsense")
 
 sessions: dict[str, dict] = {}
 
@@ -178,16 +180,43 @@ async def analyze(session_id: str):
     }
 
 
-def _zscore_series(values: pd.Series) -> pd.Series:
-    # Baseline is built from prior windows only (current window excluded) so a
-    # spike can't inflate its own median/std and dampen its z-score. Scoring
-    # starts once 5 windows total have been observed, i.e. 4 prior windows.
-    prior = values.shift(1)
-    rolling = prior.rolling(window=ROLLING_WINDOW, min_periods=ROLLING_MIN_PERIODS - 1)
-    median = rolling.median()
-    std = rolling.std()
-    zscore = (values - median) / std
-    return zscore.replace([np.inf, -np.inf], np.nan)
+def _quantile_baseline_series(values: pd.Series, metric_name: str = "metric") -> tuple[pd.Series, pd.Series, pd.Series]:
+    """Robust baseline for heavy-tailed telemetry: median as center, and the
+    median of the top 10 prior values (sigma_surrogate) as a stand-in for
+    spread. A window is anomalous when its value exceeds sigma_surrogate —
+    genuinely unusual rather than just a busy period. Baseline is built from
+    the prior ROLLING_WINDOW windows only (current window excluded) so a
+    spike can't inflate its own baseline. Scoring starts once 5 windows total
+    have been observed, i.e. 4 prior windows.
+    """
+    n = len(values)
+    baseline_median = [float("nan")] * n
+    sigma_surrogate = [float("nan")] * n
+    anomalous = [False] * n
+
+    for i in range(n):
+        prior = values.iloc[max(0, i - ROLLING_WINDOW):i].tolist()
+        if len(prior) < ROLLING_MIN_PERIODS - 1:
+            continue
+        if len(set(prior)) <= 1:
+            logger.warning(
+                "Skipping anomaly scoring for %s at window %d: prior baseline values are all zero/identical",
+                metric_name, i,
+            )
+            continue
+
+        top_n = sorted(prior, reverse=True)[:TOP_N_SURROGATE]
+        surrogate = statistics.median(top_n)
+
+        baseline_median[i] = statistics.median(prior)
+        sigma_surrogate[i] = surrogate
+        anomalous[i] = values.iloc[i] > surrogate
+
+    return (
+        pd.Series(baseline_median, index=values.index, dtype="float64"),
+        pd.Series(sigma_surrogate, index=values.index, dtype="float64"),
+        pd.Series(anomalous, index=values.index, dtype="bool"),
+    )
 
 
 def _top_value(series: pd.Series) -> tuple[str | None, int]:
@@ -255,7 +284,7 @@ def _field_observation(
     if n_max_anomalous:
         return (
             f"{label} {top_value} accounted for {top_value_pct}% of observed events in this window, "
-            f"compared to a typical baseline of {round(baseline_pct, 1)}%"
+            f"compared to a typical peak baseline of {round(baseline_pct, 1)}%"
         )
     return (
         f"{label} broadened to {n_unique} distinct values in this window (typical baseline ~"
@@ -314,8 +343,15 @@ def _build_interpretation(
     time_range = _human_time_range(window_start_ts, window_end_ts)
 
     def _severity(fs: dict) -> float:
-        zs = [abs(z) for z in (fs.get("n_unique_zscore"), fs.get("n_max_zscore")) if z is not None]
-        return max(zs) if zs else 0.0
+        ratios = []
+        for value_key, surrogate_key, anomalous_key in (
+            ("n_unique", "n_unique_sigma_surrogate", "n_unique_anomalous"),
+            ("n_max", "n_max_sigma_surrogate", "n_max_anomalous"),
+        ):
+            surrogate = fs.get(surrogate_key)
+            if fs.get(anomalous_key) and surrogate:
+                ratios.append((fs[value_key] - surrogate) / surrogate)
+        return max(ratios) if ratios else 0.0
 
     ranked = sorted(contributing_field_stats, key=_severity, reverse=True)
     sentences = []
@@ -406,21 +442,30 @@ async def confirm_fields(session_id: str, body: ConfirmFieldsRequest):
             field_unique_series[field_name].append(n_unique)
             field_max_series[field_name].append(n_max)
 
-    event_rate_z = _zscore_series(pd.Series(event_rate_values))
-    event_rate_anomalous = (event_rate_z.abs() > ZSCORE_THRESHOLD).fillna(False)
+    event_rate_baseline_median, event_rate_sigma_surrogate, event_rate_anomalous = _quantile_baseline_series(
+        pd.Series(event_rate_values), "event_rate"
+    )
 
-    field_unique_z = {}
+    field_unique_baseline_median = {}
+    field_unique_sigma_surrogate = {}
     field_unique_anomalous = {}
-    field_max_z = {}
+    field_max_baseline_median = {}
+    field_max_sigma_surrogate = {}
     field_max_anomalous = {}
     for field_name in selected_fields:
-        z_u = _zscore_series(pd.Series(field_unique_series[field_name]))
-        field_unique_z[field_name] = z_u
-        field_unique_anomalous[field_name] = (z_u.abs() > ZSCORE_THRESHOLD).fillna(False)
+        u_median, u_surrogate, u_anom = _quantile_baseline_series(
+            pd.Series(field_unique_series[field_name]), f"{field_name}.n_unique"
+        )
+        field_unique_baseline_median[field_name] = u_median
+        field_unique_sigma_surrogate[field_name] = u_surrogate
+        field_unique_anomalous[field_name] = u_anom
 
-        z_m = _zscore_series(pd.Series(field_max_series[field_name]))
-        field_max_z[field_name] = z_m
-        field_max_anomalous[field_name] = (z_m.abs() > ZSCORE_THRESHOLD).fillna(False)
+        m_median, m_surrogate, m_anom = _quantile_baseline_series(
+            pd.Series(field_max_series[field_name]), f"{field_name}.n_max"
+        )
+        field_max_baseline_median[field_name] = m_median
+        field_max_sigma_surrogate[field_name] = m_surrogate
+        field_max_anomalous[field_name] = m_anom
 
     windows = []
     flagged_indices = []
@@ -438,15 +483,19 @@ async def confirm_fields(session_id: str, body: ConfirmFieldsRequest):
             n_unique_spiked = n_unique_spiked or u_anom
             n_max_spiked = n_max_spiked or m_anom
 
-            u_z = field_unique_z[field_name].iloc[w]
-            m_z = field_max_z[field_name].iloc[w]
+            u_baseline = field_unique_baseline_median[field_name].iloc[w]
+            u_surrogate = field_unique_sigma_surrogate[field_name].iloc[w]
+            m_baseline = field_max_baseline_median[field_name].iloc[w]
+            m_surrogate = field_max_sigma_surrogate[field_name].iloc[w]
             field_stats.append({
                 "field_name": field_name,
                 "n_unique": field_unique_series[field_name][w],
                 "n_max": field_max_series[field_name][w],
-                "n_unique_zscore": None if pd.isna(u_z) else float(u_z),
-                "n_max_zscore": None if pd.isna(m_z) else float(m_z),
+                "n_unique_baseline_median": None if pd.isna(u_baseline) else float(u_baseline),
+                "n_unique_sigma_surrogate": None if pd.isna(u_surrogate) else float(u_surrogate),
                 "n_unique_anomalous": u_anom,
+                "n_max_baseline_median": None if pd.isna(m_baseline) else float(m_baseline),
+                "n_max_sigma_surrogate": None if pd.isna(m_surrogate) else float(m_surrogate),
                 "n_max_anomalous": m_anom,
             })
 
@@ -514,10 +563,15 @@ async def confirm_fields(session_id: str, body: ConfirmFieldsRequest):
             rate_multiplier,
         )
 
+        w_baseline_median = event_rate_baseline_median.iloc[w]
+        w_sigma_surrogate = event_rate_sigma_surrogate.iloc[w]
+
         flagged_windows.append({
             **window,
             "field_stats": enriched_field_stats,
             "baseline_event_rate": baseline_event_rate,
+            "baseline_median_event_rate": None if pd.isna(w_baseline_median) else float(w_baseline_median),
+            "sigma_surrogate_event_rate": None if pd.isna(w_sigma_surrogate) else float(w_sigma_surrogate),
             "flagged_event_rate": flagged_event_rate,
             "rate_multiplier": rate_multiplier,
             "interpretation": interpretation,
