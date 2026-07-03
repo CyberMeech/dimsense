@@ -1,5 +1,45 @@
+import { useRef, useState } from 'react'
+import { createPortal } from 'react-dom'
+
 function formatNumber(n) {
   return n.toLocaleString()
+}
+
+function ReasonCell({ reason }) {
+  const [tooltip, setTooltip] = useState(null)
+  const textRef = useRef(null)
+
+  const showTooltip = () => {
+    const rect = textRef.current.getBoundingClientRect()
+    const left = Math.min(
+      Math.max(rect.left + rect.width / 2, 96),
+      window.innerWidth - 96
+    )
+    setTooltip({ top: rect.top, left })
+  }
+
+  return (
+    <td className="px-4 py-3 text-text-secondary max-w-xs">
+      <div
+        ref={textRef}
+        className="truncate"
+        onMouseEnter={showTooltip}
+        onMouseLeave={() => setTooltip(null)}
+      >
+        {reason}
+      </div>
+      {tooltip &&
+        createPortal(
+          <div
+            className="pointer-events-none fixed z-50 w-max max-w-sm -translate-x-1/2 -translate-y-[calc(100%+8px)] rounded-lg border border-border bg-card px-3 py-2 text-xs leading-relaxed text-text-primary shadow-lg"
+            style={{ top: tooltip.top, left: tooltip.left }}
+          >
+            {reason}
+          </div>,
+          document.body
+        )}
+    </td>
+  )
 }
 
 export default function FieldTable({ fields, selected, onToggle }) {
@@ -70,12 +110,7 @@ export default function FieldTable({ fields, selected, onToggle }) {
                   className="h-4 w-4 rounded accent-accent cursor-pointer"
                 />
               </td>
-              <td
-                className="px-4 py-3 text-text-secondary max-w-xs truncate"
-                title={field.plain_english_reason}
-              >
-                {field.plain_english_reason}
-              </td>
+              <ReasonCell reason={field.plain_english_reason} />
             </tr>
           ))}
         </tbody>
