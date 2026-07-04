@@ -1,7 +1,21 @@
 import axios from 'axios'
 
+// Inside the Tauri app, the webview loads from a custom protocol
+// (tauri://localhost / https://tauri.localhost), not from
+// http://localhost:8000 — so a relative URL would resolve against the
+// wrong origin and never reach the sidecar backend. `window.isTauri` is
+// injected unconditionally by Tauri v2 into every webview (unlike
+// `window.__TAURI__`, which only exists if `withGlobalTauri` is enabled
+// in tauri.conf.json — it isn't here), so it's the reliable way to detect
+// this context and force an absolute URL to the sidecar instead.
+const BASE_URL = window.isTauri
+  ? 'http://127.0.0.1:8000'
+  : import.meta.env.PROD
+    ? ''
+    : import.meta.env.VITE_API_URL
+
 const client = axios.create({
-  baseURL: import.meta.env.VITE_API_URL,
+  baseURL: BASE_URL,
 })
 
 function unwrap(promise) {

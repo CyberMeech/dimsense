@@ -5,6 +5,9 @@ backend/.env
 # Uploads (temporary, deleted after analysis anyway)
 backend/uploads/
 
+# Local SQLite database
+backend/dimsense.db
+
 # Python
 **/__pycache__/
 *.pyc
@@ -18,6 +21,11 @@ data/*.csv
 
 # Frontend build output
 frontend/dist/
+dist/
+
+# PyInstaller build artifacts
+build/
+src-tauri/binaries/
 
 # Editor
 .vscode/

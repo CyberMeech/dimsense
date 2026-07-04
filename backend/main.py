@@ -1,5 +1,8 @@
+import json
 import logging
+import os
 import statistics
+import sys
 import time
 import uuid
 from contextlib import asynccontextmanager
@@ -10,8 +13,12 @@ import pandas as pd
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from sqlalchemy import Boolean, Float, ForeignKey, Integer, String, Text, delete, update
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 try:
@@ -19,8 +26,29 @@ try:
 except ImportError:
     from backend.analyze import analyze_field, classify_reason, passes_filter  # local: run from project root
 
+def get_app_data_dir() -> Path:
+    if os.name == "nt":
+        app_data = Path(os.environ.get("APPDATA", Path.home() / "AppData" / "Roaming"))
+        data_dir = app_data / "DimSense"
+    else:  # Mac/Linux for future
+        data_dir = Path.home() / ".dimsense"
+    data_dir.mkdir(parents=True, exist_ok=True)
+    return data_dir
+
+
+def get_db_path() -> Path:
+    return get_app_data_dir() / "dimsense.db"
+
+
 BASE_DIR = Path(__file__).resolve().parent
-UPLOAD_DIR = BASE_DIR / "uploads"
+UPLOAD_DIR = get_app_data_dir() / "uploads"
+
+if getattr(sys, "frozen", False):
+    # PyInstaller --onefile extracts bundled data under sys._MEIPASS at
+    # runtime; main.py no longer sits next to frontend/ on disk once frozen.
+    FRONTEND_DIST = Path(sys._MEIPASS) / "frontend" / "dist"
+else:
+    FRONTEND_DIST = BASE_DIR.parent / "frontend" / "dist"
 
 SESSION_TTL_SECONDS = 60 * 60
 WINDOW_SIZE = 8192
@@ -29,9 +57,96 @@ ROLLING_MIN_PERIODS = 5
 TOP_N_SURROGATE = 10
 ANOMALY_FLAG_THRESHOLD = 10
 
+LOCAL_TENANT_ID = "local"
+LOCAL_CONNECTOR_ID = "local"
+
 logger = logging.getLogger("dimsense")
 
 sessions: dict[str, dict] = {}
+
+
+class Base(DeclarativeBase):
+    pass
+
+
+class RetainedField(Base):
+    __tablename__ = "retained_fields"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    tenant_id: Mapped[str] = mapped_column(Text, nullable=False)
+    connector_id: Mapped[str] = mapped_column(Text, nullable=False)
+    field_name: Mapped[str] = mapped_column(Text, nullable=False)
+    n_nonempty: Mapped[int] = mapped_column(Integer, nullable=False)
+    n_unique: Mapped[int] = mapped_column(Integer, nullable=False)
+    n_max: Mapped[int] = mapped_column(Integer, nullable=False)
+    total_records: Mapped[int] = mapped_column(Integer, nullable=False)
+    passed_filter: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    algorithm_recommended: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    user_selected: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    confirmed_at: Mapped[str | None] = mapped_column(Text, nullable=True)
+    computed_at: Mapped[str] = mapped_column(Text, nullable=False)
+    plain_english_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class AnalysisWindow(Base):
+    __tablename__ = "analysis_windows"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    tenant_id: Mapped[str] = mapped_column(Text, nullable=False)
+    connector_id: Mapped[str] = mapped_column(Text, nullable=False)
+    window_start: Mapped[str] = mapped_column(Text, nullable=False)
+    window_end: Mapped[str] = mapped_column(Text, nullable=False)
+    event_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    event_rate_per_hour: Mapped[float] = mapped_column(Float, nullable=False)
+    anomaly_score: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    is_flagged: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[str] = mapped_column(Text, nullable=False)
+
+
+class WindowFieldStat(Base):
+    __tablename__ = "window_field_stats"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    window_id: Mapped[int] = mapped_column(ForeignKey("analysis_windows.id"), nullable=False)
+    tenant_id: Mapped[str] = mapped_column(Text, nullable=False)
+    field_name: Mapped[str] = mapped_column(Text, nullable=False)
+    n_unique: Mapped[int] = mapped_column(Integer, nullable=False)
+    n_max: Mapped[int] = mapped_column(Integer, nullable=False)
+    n_unique_baseline_median: Mapped[float | None] = mapped_column(Float, nullable=True)
+    n_unique_sigma_surrogate: Mapped[float | None] = mapped_column(Float, nullable=True)
+    n_max_baseline_median: Mapped[float | None] = mapped_column(Float, nullable=True)
+    n_max_sigma_surrogate: Mapped[float | None] = mapped_column(Float, nullable=True)
+    n_unique_anomalous: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    n_max_anomalous: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    created_at: Mapped[str] = mapped_column(Text, nullable=False)
+
+
+class AnomalyAlert(Base):
+    __tablename__ = "anomaly_alerts"
+
+    id: Mapped[int] = mapped_column(primary_key=True, autoincrement=True)
+    tenant_id: Mapped[str] = mapped_column(Text, nullable=False)
+    window_id: Mapped[int] = mapped_column(ForeignKey("analysis_windows.id"), nullable=False)
+    severity: Mapped[str] = mapped_column(Text, nullable=False)
+    anomaly_score: Mapped[int] = mapped_column(Integer, nullable=False)
+    interpretation_text: Mapped[str] = mapped_column(Text, nullable=False)
+    spiked_metrics: Mapped[str | None] = mapped_column(Text, nullable=True)
+    acknowledged: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    acknowledged_at: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[str] = mapped_column(Text, nullable=False)
+
+
+DB_PATH = get_db_path()
+engine = create_async_engine(f"sqlite+aiosqlite:///{DB_PATH.as_posix()}")
+async_session = async_sessionmaker(engine, expire_on_commit=False)
+
+
+def _severity_for_score(score: int) -> str:
+    if score >= 20:
+        return "critical"
+    if score >= 15:
+        return "high"
+    return "medium"
 
 
 def _purge_expired_sessions() -> None:
@@ -55,6 +170,8 @@ def _get_session(session_id: str) -> dict:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     UPLOAD_DIR.mkdir(exist_ok=True)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
     yield
 
 
@@ -166,6 +283,34 @@ async def analyze(session_id: str):
         })
 
     session["analysis"] = fields
+
+    computed_at = datetime.now(timezone.utc).isoformat()
+    async with async_session() as db:
+        await db.execute(
+            delete(RetainedField).where(
+                RetainedField.tenant_id == LOCAL_TENANT_ID,
+                RetainedField.connector_id == LOCAL_CONNECTOR_ID,
+            )
+        )
+        db.add_all(
+            RetainedField(
+                tenant_id=LOCAL_TENANT_ID,
+                connector_id=LOCAL_CONNECTOR_ID,
+                field_name=f["field_name"],
+                n_nonempty=f["n_nonempty"],
+                n_unique=f["n_unique"],
+                n_max=f["n_max"],
+                total_records=f["total_records"],
+                passed_filter=f["passed_filter"],
+                algorithm_recommended=f["algorithm_recommended"],
+                user_selected=None,
+                confirmed_at=None,
+                computed_at=computed_at,
+                plain_english_reason=f["plain_english_reason"],
+            )
+            for f in fields
+        )
+        await db.commit()
 
     csv_path = session.get("csv_path")
     if csv_path and Path(csv_path).exists():
@@ -579,6 +724,88 @@ async def confirm_fields(session_id: str, body: ConfirmFieldsRequest):
 
     session["confirmed_fields"] = selected_fields
 
+    now_iso = datetime.now(timezone.utc).isoformat()
+    async with async_session() as db:
+        for window in windows:
+            w = window["window_index"]
+            aw = AnalysisWindow(
+                tenant_id=LOCAL_TENANT_ID,
+                connector_id=LOCAL_CONNECTOR_ID,
+                window_start=window["window_start"],
+                window_end=window["window_end"],
+                event_count=WINDOW_SIZE,
+                event_rate_per_hour=window["event_rate_per_hour"],
+                anomaly_score=window["anomaly_score"],
+                is_flagged=window["is_flagged"],
+                created_at=now_iso,
+            )
+            db.add(aw)
+            await db.flush()
+
+            for fs in window["field_stats"]:
+                db.add(
+                    WindowFieldStat(
+                        window_id=aw.id,
+                        tenant_id=LOCAL_TENANT_ID,
+                        field_name=fs["field_name"],
+                        n_unique=fs["n_unique"],
+                        n_max=fs["n_max"],
+                        n_unique_baseline_median=fs["n_unique_baseline_median"],
+                        n_unique_sigma_surrogate=fs["n_unique_sigma_surrogate"],
+                        n_max_baseline_median=fs["n_max_baseline_median"],
+                        n_max_sigma_surrogate=fs["n_max_sigma_surrogate"],
+                        n_unique_anomalous=fs["n_unique_anomalous"],
+                        n_max_anomalous=fs["n_max_anomalous"],
+                        created_at=now_iso,
+                    )
+                )
+
+            if window["is_flagged"]:
+                flagged_window = next(
+                    fw for fw in flagged_windows if fw["window_index"] == w
+                )
+                event_rate_spiked, n_max_spiked, n_unique_spiked = window_spike_flags[w]
+                spiked_metrics = [
+                    fs["field_name"]
+                    for fs in window["field_stats"]
+                    if fs["n_max_anomalous"] or fs["n_unique_anomalous"]
+                ]
+                if event_rate_spiked:
+                    spiked_metrics.append("event_rate")
+                db.add(
+                    AnomalyAlert(
+                        tenant_id=LOCAL_TENANT_ID,
+                        window_id=aw.id,
+                        severity=_severity_for_score(window["anomaly_score"]),
+                        anomaly_score=window["anomaly_score"],
+                        interpretation_text=flagged_window["interpretation"],
+                        spiked_metrics=json.dumps(spiked_metrics),
+                        acknowledged=False,
+                        acknowledged_at=None,
+                        created_at=now_iso,
+                    )
+                )
+
+        await db.execute(
+            update(RetainedField)
+            .where(
+                RetainedField.tenant_id == LOCAL_TENANT_ID,
+                RetainedField.connector_id == LOCAL_CONNECTOR_ID,
+                RetainedField.field_name.in_(selected_fields),
+            )
+            .values(user_selected=True, confirmed_at=now_iso)
+        )
+        await db.execute(
+            update(RetainedField)
+            .where(
+                RetainedField.tenant_id == LOCAL_TENANT_ID,
+                RetainedField.connector_id == LOCAL_CONNECTOR_ID,
+                RetainedField.field_name.not_in(selected_fields),
+            )
+            .values(user_selected=False)
+        )
+        await db.commit()
+
     return {
         "session_id": session_id,
         "window_size": WINDOW_SIZE,
@@ -586,3 +813,22 @@ async def confirm_fields(session_id: str, body: ConfirmFieldsRequest):
         "windows": windows,
         "flagged_windows": flagged_windows,
     }
+
+
+if FRONTEND_DIST.is_dir():
+    app.mount("/assets", StaticFiles(directory=FRONTEND_DIST / "assets"), name="frontend-assets")
+
+    @app.get("/{full_path:path}")
+    async def serve_frontend(full_path: str):
+        candidate = FRONTEND_DIST / full_path
+        if full_path and candidate.is_file():
+            return FileResponse(candidate)
+        return FileResponse(FRONTEND_DIST / "index.html")
+
+
+if __name__ == "__main__":
+    # Entry point for the frozen (PyInstaller) executable, which has no
+    # separate `uvicorn` CLI process to import this module and serve it.
+    import uvicorn
+
+    uvicorn.run(app, host="127.0.0.1", port=8000)
