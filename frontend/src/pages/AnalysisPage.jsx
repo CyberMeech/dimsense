@@ -17,13 +17,13 @@ export default function AnalysisPage() {
           No analysis data found
         </h1>
         <p className="mt-2 text-text-secondary">
-          Upload a CSV from the home page to start an analysis.
+          Upload a CSV from the demo page to start an analysis.
         </p>
         <Link
-          to="/"
+          to="/demo"
           className="mt-6 inline-flex items-center rounded-lg bg-accent px-5 py-2.5 text-sm font-semibold text-white hover:bg-accent/90"
         >
-          Go to Home
+          Go to Demo
         </Link>
       </div>
     )
