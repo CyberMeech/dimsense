@@ -53,3 +53,71 @@ export function confirmFields(sessionId, selectedFields) {
       .then((res) => res.data),
   )
 }
+
+// ---------------------------------------------------------------------------
+// Security Onion data source. Same base URL and error handling as the CSV
+// endpoints; the backend answers {"error": "..."} on every failure.
+// ---------------------------------------------------------------------------
+
+function soConnectionBody(host, port, username, password, verifySsl) {
+  return {
+    host: host.trim(),
+    port: Number(port),
+    username,
+    password,
+    verify_ssl: Boolean(verifySsl),
+  }
+}
+
+export function testSOConnection(host, port, username, password, verifySsl) {
+  return unwrap(
+    client
+      .post('/so/test-connection', soConnectionBody(host, port, username, password, verifySsl))
+      .then((res) => res.data),
+  )
+}
+
+export function listSOIndices(host, port, username, password, verifySsl) {
+  return unwrap(
+    client
+      .post('/so/list-indices', soConnectionBody(host, port, username, password, verifySsl))
+      .then((res) => res.data),
+  )
+}
+
+export function querySOData(
+  host,
+  port,
+  username,
+  password,
+  verifySsl,
+  indexPattern,
+  startTime,
+  endTime,
+  maxRows,
+) {
+  return unwrap(
+    client
+      .post('/so/query', {
+        ...soConnectionBody(host, port, username, password, verifySsl),
+        index_pattern: indexPattern,
+        start_time: startTime,
+        end_time: endTime,
+        max_rows: Number(maxRows),
+        time_field: '@timestamp',
+      })
+      .then((res) => res.data),
+  )
+}
+
+export function previewSOFields(host, port, username, password, verifySsl, indexPattern, sampleSize = 1000) {
+  return unwrap(
+    client
+      .post('/so/preview-fields', {
+        ...soConnectionBody(host, port, username, password, verifySsl),
+        index_pattern: indexPattern,
+        sample_size: Number(sampleSize),
+      })
+      .then((res) => res.data),
+  )
+}

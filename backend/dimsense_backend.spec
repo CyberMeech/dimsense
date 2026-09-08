@@ -28,6 +28,21 @@ hiddenimports = [
     "pandas",
     "numpy",
     "multipart",
+    # Security Onion connector (elasticsearch-py 8.x and its transport layer)
+    "elasticsearch",
+    "elasticsearch.helpers",
+    "elasticsearch._sync.client",
+    "elasticsearch.exceptions",
+    "elastic_transport",
+    "elastic_transport._transport",
+    "elastic_transport._node",
+    "elastic_transport._node._http_urllib3",   # sync urllib3 node used by the connector
+    "elastic_transport._node._urllib3_chain_certs",
+    # NOTE: elastic_transport._node._http_aiohttp is intentionally omitted;
+    # aiohttp is not installed and the connector only uses the sync client.
+    "urllib3",
+    "urllib3.util.ssl_",
+    "certifi",
 ]
 
 a = Analysis(

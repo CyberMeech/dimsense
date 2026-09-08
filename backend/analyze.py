@@ -5,8 +5,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import pandas as pd
-from dotenv import load_dotenv
-from supabase import create_client
+
+# NOTE: python-dotenv and supabase are imported lazily inside
+# get_supabase_client() so that importing the pure analysis functions
+# (analyze_field / passes_filter / classify_reason) from the API does not
+# require those packages to be installed.
 
 # Heuristic bounds from the paper's Big Data Dimensional Analysis:
 # Nnonempty ~ N, 1 << Nunique << N, 1 << Nmax << N. Thresholds are
@@ -48,19 +51,25 @@ def classify_reason(n_nonempty, n_unique, n_max, total_records, passed):
     coverage_ratio = (n_nonempty / total_records) if total_records else 0
     if coverage_ratio < MIN_COVERAGE_RATIO:
         return (
-            "Present in fewer than 80% of records — too sparse for reliable "
+            f"Present in fewer than {MIN_COVERAGE_RATIO:.0%} of records — too sparse for reliable "
             "analysis. May still be operationally valuable — consider manual override"
         )
     if n_max < MIN_MAX_FREQUENCY:
         return "All or nearly all values unique — likely an ID or hash field, no pattern to analyze at scale"
     if n_unique < MIN_UNIQUE_VALUES:
-        return "Single value dominates — constant field, no variance to detect"
+        return (
+            f"Fewer than {MIN_UNIQUE_VALUES} distinct values — near-constant field, "
+            "not enough variance to detect"
+        )
     if n_unique > MAX_UNIQUE_RATIO * total_records:
         return "Too many distinct values — likely a counter or port number with no repeating pattern"
     return "Single value dominates — constant field, no variance to detect"
 
 
 def get_supabase_client():
+    from dotenv import load_dotenv
+    from supabase import create_client
+
     load_dotenv()
     url = os.environ.get("SUPABASE_URL")
     key = os.environ.get("SUPABASE_SERVICE_KEY")

@@ -6,3 +6,4 @@ uvicorn[standard]>=0.29
 python-multipart>=0.0.9
 sqlalchemy>=2.0
 aiosqlite>=0.20
+elasticsearch>=8.0.0,<9.0.0
