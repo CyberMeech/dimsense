@@ -11,13 +11,20 @@ from fastapi import FastAPI, File, HTTPException, Request, UploadFile
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 try:
     from analyze import analyze_field, classify_reason, passes_filter  # Railway: backend/ is root
 except ImportError:
     from backend.analyze import analyze_field, classify_reason, passes_filter  # local: run from project root
+
+try:
+    from connectors.security_onion import SecurityOnionConnector, SecurityOnionError
+except ModuleNotFoundError as exc:
+    if exc.name != "connectors":
+        raise
+    from backend.connectors.security_onion import SecurityOnionConnector, SecurityOnionError
 
 BASE_DIR = Path(__file__).resolve().parent
 UPLOAD_DIR = BASE_DIR / "uploads"
@@ -28,6 +35,7 @@ ROLLING_WINDOW = 20
 ROLLING_MIN_PERIODS = 5
 TOP_N_SURROGATE = 10
 ANOMALY_FLAG_THRESHOLD = 10
+MAX_UPLOAD_ROWS = 500_000
 
 logger = logging.getLogger("dimsense")
 
@@ -91,6 +99,11 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
     return JSONResponse(status_code=422, content={"error": f"Invalid request: {messages}"})
 
 
+@app.exception_handler(SecurityOnionError)
+async def security_onion_error_handler(request: Request, exc: SecurityOnionError):
+    return JSONResponse(status_code=exc.status_code, content={"error": exc.message})
+
+
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception):
     return JSONResponse(status_code=500, content={"error": f"Internal server error: {exc}"})
@@ -98,6 +111,27 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
 
 class ConfirmFieldsRequest(BaseModel):
     selected_fields: list[str]
+
+
+class SOConnectionRequest(BaseModel):
+    host: str = Field(..., min_length=1, description="Security Onion Elasticsearch host, e.g. 192.168.1.100")
+    port: int = Field(9200, ge=1, le=65535)
+    username: str
+    password: str
+    verify_ssl: bool = False
+
+
+class SOPreviewFieldsRequest(SOConnectionRequest):
+    index_pattern: str = Field(..., min_length=1, description="e.g. logs-zeek.conn-*")
+    sample_size: int = Field(1000, ge=1, le=10_000)
+
+
+class SOQueryRequest(SOConnectionRequest):
+    index_pattern: str = Field(..., min_length=1, description="e.g. logs-zeek.conn-*")
+    start_time: str = Field(..., description="ISO 8601, e.g. 2024-01-01T00:00:00 (UTC if no offset given)")
+    end_time: str = Field(..., description="ISO 8601, e.g. 2024-01-02T00:00:00 (UTC if no offset given)")
+    max_rows: int = Field(100_000, ge=1, le=MAX_UPLOAD_ROWS)
+    time_field: str = Field("@timestamp", min_length=1)
 
 
 @app.get("/health")
@@ -126,6 +160,18 @@ async def upload_csv(file: UploadFile = File(...)):
     if len(df.columns) == 0:
         csv_path.unlink(missing_ok=True)
         raise HTTPException(status_code=400, detail="CSV has no columns")
+
+    row_count = len(df)
+    if row_count > MAX_UPLOAD_ROWS:
+        csv_path.unlink(missing_ok=True)
+        del df
+        raise HTTPException(
+            status_code=413,
+            detail=(
+                f"File too large. Maximum {MAX_UPLOAD_ROWS:,} rows supported. "
+                f"Your file has {row_count:,} rows. For larger datasets use the desktop app."
+            ),
+        )
 
     sessions[session_id] = {
         "created_at": time.time(),
@@ -585,4 +631,111 @@ async def confirm_fields(session_id: str, body: ConfirmFieldsRequest):
         "total_windows": total_windows,
         "windows": windows,
         "flagged_windows": flagged_windows,
+    }
+
+
+# --------------------------------------------------------------------------- #
+# Security Onion data source                                                  #
+#                                                                             #
+# These endpoints are plain ``def`` (not ``async def``) on purpose: the       #
+# Elasticsearch client is blocking and may wait up to 30s on a slow or dead   #
+# host, so FastAPI runs them in its threadpool instead of the event loop.     #
+# --------------------------------------------------------------------------- #
+
+def _so_connector(body: SOConnectionRequest) -> SecurityOnionConnector:
+    return SecurityOnionConnector(
+        host=body.host,
+        port=body.port,
+        username=body.username,
+        password=body.password,
+        verify_ssl=body.verify_ssl,
+    )
+
+
+def _validate_so_time_range(start_time: str, end_time: str) -> None:
+    try:
+        start = pd.Timestamp(start_time)
+        end = pd.Timestamp(end_time)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"start_time and end_time must be ISO 8601 timestamps (e.g. 2024-01-01T00:00:00): {exc}",
+        )
+    if pd.isna(start) or pd.isna(end):
+        raise HTTPException(status_code=400, detail="start_time and end_time must be ISO 8601 timestamps")
+    try:
+        if start >= end:
+            raise HTTPException(status_code=400, detail="start_time must be earlier than end_time")
+    except TypeError:
+        # One timestamp is timezone-aware and the other naive; let Elasticsearch judge.
+        pass
+
+
+@app.post("/so/test-connection")
+def so_test_connection(body: SOConnectionRequest):
+    connector = _so_connector(body)
+    try:
+        return connector.test_connection()
+    finally:
+        connector.close()
+
+
+@app.post("/so/list-indices")
+def so_list_indices(body: SOConnectionRequest):
+    connector = _so_connector(body)
+    try:
+        return {"indices": connector.list_indices()}
+    finally:
+        connector.close()
+
+
+@app.post("/so/preview-fields")
+def so_preview_fields(body: SOPreviewFieldsRequest):
+    connector = _so_connector(body)
+    try:
+        fields = connector.get_field_sample(body.index_pattern, body.sample_size)
+    finally:
+        connector.close()
+    return {"fields": fields, "sample_size": body.sample_size}
+
+
+@app.post("/so/query")
+def so_query(body: SOQueryRequest):
+    """Pull events from Security Onion into a new session. The session is
+    stored exactly like a CSV upload so /analyze and /confirm-fields work
+    unchanged."""
+    _purge_expired_sessions()
+    _validate_so_time_range(body.start_time, body.end_time)
+
+    connector = _so_connector(body)
+    try:
+        df = connector.query_events(
+            index_pattern=body.index_pattern,
+            start_time=body.start_time,
+            end_time=body.end_time,
+            max_rows=body.max_rows,
+            time_field=body.time_field,
+        )
+    finally:
+        connector.close()
+
+    if df.empty:
+        message = df.attrs.get("message") or "Query returned no events"
+        raise HTTPException(status_code=404 if df.attrs.get("not_found") else 400, detail=message)
+
+    session_id = str(uuid.uuid4())
+    sessions[session_id] = {
+        "created_at": time.time(),
+        "csv_path": None,
+        "df": df,
+        "analysis": None,
+        "confirmed_fields": None,
+    }
+
+    return {
+        "session_id": session_id,
+        "row_count": len(df),
+        "field_count": len(df.columns),
+        "preview": df.head(5).to_dict(orient="records"),
+        "source": "security_onion",
     }
