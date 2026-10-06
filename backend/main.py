@@ -22,9 +22,9 @@ from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 try:
-    from analyze import analyze_field, classify_reason, passes_filter  # Railway: backend/ is root
+    from analyze import analyze_dataframe, analyze_field  # Railway: backend/ is root
 except ImportError:
-    from backend.analyze import analyze_field, classify_reason, passes_filter  # local: run from project root
+    from backend.analyze import analyze_dataframe, analyze_field  # local: run from project root
 
 try:
     from connectors.security_onion import SecurityOnionConnector, SecurityOnionError
@@ -312,21 +312,9 @@ async def analyze(session_id: str):
     df = session["df"]
     total_records = len(df)
 
-    fields = []
-    for field_name in df.columns:
-        n_nonempty, n_unique, n_max = analyze_field(df[field_name])
-        passed = passes_filter(n_nonempty, n_unique, n_max, total_records)
-        reason = classify_reason(n_nonempty, n_unique, n_max, total_records, passed)
-        fields.append({
-            "field_name": field_name,
-            "n_nonempty": n_nonempty,
-            "n_unique": n_unique,
-            "n_max": n_max,
-            "total_records": total_records,
-            "passed_filter": passed,
-            "algorithm_recommended": passed,
-            "plain_english_reason": reason,
-        })
+    # Revised MIT formula: per-field stats (incl. n1 / max_val), the three
+    # retention filters, primary key detection and timestamp selection.
+    fields = analyze_dataframe(df)
 
     session["analysis"] = fields
 
