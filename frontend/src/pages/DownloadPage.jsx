@@ -1,7 +1,7 @@
 import { Link } from 'react-router-dom'
 
 const DOWNLOAD_URL =
-  'https://github.com/CyberMeech/dimsense/releases/download/v0.1.0/DimSense_0.1.0_x64-setup.exe'
+  'https://github.com/CyberMeech/dimsense/releases/download/v0.2.0/DimSense_0.2.0_x64-setup.exe'
 
 const REQUIREMENTS = [
   'Windows 10 or Windows 11 (64-bit)',
@@ -11,14 +11,15 @@ const REQUIREMENTS = [
 
 const STEPS = [
   'Download the installer above',
-  'Run DimSense_0.1.0_x64-setup.exe — Windows will show a security warning because this release is not yet code signed. Click More info then Run anyway to proceed. Code signing is in progress for the next release.',
+  'Run DimSense_0.2.0_x64-setup.exe and follow the installer prompts',
   'Open DimSense from your Start menu and upload your first CSV',
 ]
 
 const INCLUDED = [
   'Full dimensional analysis engine',
   'Automated field scoring and selection',
-  'Anomaly detection with quantile-based scoring',
+  'Security Onion direct connection support',
+  'Updated quantile-based anomaly detection',
   'Plain English findings summary',
   'Local SQLite database — no cloud storage',
   'Works completely offline',
@@ -55,7 +56,7 @@ export default function DownloadPage() {
           href={DOWNLOAD_URL}
           className="inline-flex items-center justify-center rounded-lg bg-accent px-8 py-4 text-base font-semibold text-white hover:bg-accent/90 transition-colors"
         >
-          Download for Windows — v0.1.0
+          Download for Windows — v0.2.0
         </a>
       </div>
 
