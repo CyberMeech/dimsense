@@ -41,19 +41,27 @@ export default function AboutPage() {
 
       <Section title="The research behind it">
         <p>
-          DimSense is an implementation of the Big Data Dimensional Analysis
-          method described in:
-        </p>
-        <p className="text-text-primary font-medium">
-          Schofield, C., Jananthan, H., and Kepner, J. "AI for Scalable
-          Defensive Cyber Log Analysis." IEEE HPEC, 2026.
+          DimSense is an implementation of methods described in two papers
+          from the MIT and IEEE research community:
         </p>
         <p>
-          The paper proposes scoring every field in a log source along three
-          statistical dimensions — coverage, diversity, and concentration —
-          to automatically surface the fields with the strongest analytical
-          signal, then monitoring those fields over rolling time windows to
-          detect coordinated behavioral shifts.
+          <span className="text-text-primary font-medium">
+            Schofield, C., Jananthan, H., and Kepner, J. &ldquo;AI for Scalable
+            Defensive Cyber Log Analysis.&rdquo; IEEE HPEC, 2026
+          </span>{' '}
+          — proposes scoring every field in a log source along three
+          statistical dimensions to automatically surface fields with the
+          strongest analytical signal, then monitoring those fields over
+          rolling time windows to detect coordinated behavioral shifts.
+        </p>
+        <p>
+          <span className="text-text-primary font-medium">
+            Voloshchuk, I., Jananthan, H., and Kepner, J. &ldquo;SAIVE: Selecting
+            AI Valuable Entities.&rdquo; IEEE MIT URTC, 2026
+          </span>{' '}
+          — extends the field selection methodology with additional metrics
+          for identifying analytically valuable entities in high-dimensional
+          sparse data.
         </p>
       </Section>
 
@@ -75,6 +83,19 @@ export default function AboutPage() {
           fields with a meaningful "normal" distribution from fields that are
           either dominated by one value or have no repeating structure at
           all.
+        </p>
+        <p>
+          <span className="text-text-primary font-medium">Singleton count (n1):</span>{' '}
+          How many values appear exactly once. A field with high diversity
+          but also high singletons is mostly unpredictable noise. A field with
+          high diversity but low singletons has repeating patterns worth
+          tracking.
+        </p>
+        <p>
+          <span className="text-text-primary font-medium">Dominant value (max_val):</span>{' '}
+          The actual most frequent value in a field, not just its count. This
+          is what lets DimSense say &ldquo;destination IP 10.10.99.200 dominated
+          49% of traffic&rdquo; rather than just showing a number.
         </p>
       </Section>
 
@@ -111,10 +132,14 @@ export default function AboutPage() {
 
       <Section title="Who this is for">
         <p>
-          DimSense is built for security analysts at mid-market
-          organizations — teams that have an EDR generating plenty of log
-          data, but lack the time or headcount to build and tune custom
-          detection rules for every dataset they collect.
+          DimSense is built for security analysts and security operations
+          teams who have EDR or network security monitoring data but need a
+          faster way to surface what matters. This includes mid-market
+          security teams that lack the headcount to write and tune custom
+          detection rules, SOC analysts running tabletop exercises who need
+          near real-time anomaly visibility against Security Onion logs, and
+          anyone who wants to test whether a past incident left a detectable
+          signature in their existing log data.
         </p>
       </Section>
 
