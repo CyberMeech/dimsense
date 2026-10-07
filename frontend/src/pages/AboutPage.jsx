@@ -7,7 +7,7 @@ const REFERENCES = [
   },
   {
     title: 'SAIVE: Selecting AI Valuable Entities',
-    url: 'http://arxiv.org/abs/2609.36512',
+    url: 'https://arxiv.org/abs/2609.36512',
     authors: 'Inna Voloshchuk, Hayden Jananthan, Jeremy Kepner',
     venue: 'IEEE MIT Undergraduate Research Technology Conference (URTC), October 2026',
   },
