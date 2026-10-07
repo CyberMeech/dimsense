@@ -1,3 +1,18 @@
+const REFERENCES = [
+  {
+    title: 'AI for Scalable Defensive Cyber Log Analysis',
+    url: 'https://hdl.handle.net/1721.1/165231',
+    authors: 'Catherine Schofield, Hayden Jananthan, Jeremy Kepner',
+    venue: 'IEEE High Performance Extreme Computing (HPEC) Conference, September 2026',
+  },
+  {
+    title: 'SAIVE: Selecting AI Valuable Entities',
+    url: 'http://arxiv.org/abs/2609.36512',
+    authors: 'Inna Voloshchuk, Hayden Jananthan, Jeremy Kepner',
+    venue: 'IEEE MIT Undergraduate Research Technology Conference (URTC), October 2026',
+  },
+]
+
 function Section({ title, children }) {
   return (
     <section className="mb-12">
@@ -30,8 +45,8 @@ export default function AboutPage() {
           method described in:
         </p>
         <p className="text-text-primary font-medium">
-          Schofield, M. et al. "AI for Scalable Defensive Cyber Log Analysis."
-          MIT Lincoln Laboratory / U.S. Air Force, 2025.
+          Schofield, C., Jananthan, H., and Kepner, J. "AI for Scalable
+          Defensive Cyber Log Analysis." IEEE HPEC, 2026.
         </p>
         <p>
           The paper proposes scoring every field in a log source along three
@@ -101,6 +116,28 @@ export default function AboutPage() {
           data, but lack the time or headcount to build and tune custom
           detection rules for every dataset they collect.
         </p>
+      </Section>
+
+      <Section title="References">
+        <ol className="space-y-4 list-none p-0">
+          {REFERENCES.map((ref, i) => (
+            <li key={ref.url} className="rounded-xl border border-border bg-card p-5 flex gap-4">
+              <span className="text-text-secondary/70 text-sm font-mono pt-0.5 shrink-0">[{i + 1}]</span>
+              <div className="min-w-0">
+                <a
+                  href={ref.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-accent hover:text-accent/80 font-medium leading-snug"
+                >
+                  {ref.title}
+                </a>
+                <p className="mt-1 text-sm text-text-secondary">{ref.authors}</p>
+                <p className="mt-0.5 text-xs text-text-secondary/70">{ref.venue}</p>
+              </div>
+            </li>
+          ))}
+        </ol>
       </Section>
     </div>
   )
